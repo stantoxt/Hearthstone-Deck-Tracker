@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using HearthDb.Enums;
+using Hearthstone_Deck_Tracker.BobsBuddy;
 using Hearthstone_Deck_Tracker.Enums;
 using Hearthstone_Deck_Tracker.Hearthstone;
 using Hearthstone_Deck_Tracker.Hearthstone.Entities;
@@ -137,6 +138,7 @@ namespace Hearthstone_Deck_Tracker.Live
 			var format = Core.Game.CurrentFormat ?? Format.Wild;
 			var gameType = HearthDbConverter.GetBnetGameType(Core.Game.CurrentGameType, format);
 
+			var sendingState = gameType == BnetGameType.BGT_BATTLEGROUNDS ? GetBobsBuddyState() : null;
 			return new BoardState
 			{
 				Player = new BoardStatePlayer
@@ -182,6 +184,79 @@ namespace Hearthstone_Deck_Tracker.Live
 					Fatigue = Core.Game.OpponentEntity.GetTag(GameTag.FATIGUE)
 				},
 				GameType = gameType,
+				BobsBuddyOutput = gameType == BnetGameType.BGT_BATTLEGROUNDS ? GetBobsBuddyState() : null
+				
+			};
+		}
+
+		private Data.BobsBuddyState GetBobsBuddyState()
+		{
+			
+			if(Core.Game.CurrentGameStats == null || Core.Game.GameEntity == null)
+				return null;
+			int turn = Core.Game.GameEntity.GetTag(GameTag.TURN) %2 == 0? Core.Game.GetTurnNumber() : Core.Game.GetTurnNumber() - 1;
+			
+			var invokerInstance = BobsBuddyInvoker.GetInstance(Core.Game.CurrentGameStats.GameId, Math.Max(turn, 1) , false);
+
+			var output = invokerInstance?.GetOutput();
+
+
+			TwitchSimulationState simulationState = TwitchSimulationState.WaitingForCombat;
+			var errorstate = invokerInstance?.CurrentErrorState() ?? BobsBuddyErrorState.None;
+			if(errorstate != BobsBuddyErrorState.None)
+			{
+				switch(invokerInstance?.CurrentErrorState())
+				{
+					case BobsBuddyErrorState.NotEnoughData:
+						simulationState = TwitchSimulationState.TooFewSimulations;
+						break;
+					case BobsBuddyErrorState.SecretsNotSupported:
+						simulationState = TwitchSimulationState.OpponentSecrets;
+						break;
+					case BobsBuddyErrorState.UnkownCards:
+						simulationState = TwitchSimulationState.UnknownCards;
+						break;
+					case BobsBuddyErrorState.UpdateRequired:
+						simulationState = TwitchSimulationState.UpdateRequired;
+						break;
+				}
+				return new Data.BobsBuddyState { SimulationState = simulationState };
+			}
+
+			if(output == null)
+			{
+				return new Data.BobsBuddyState
+				{
+					SimulationState = TwitchSimulationState.WaitingForCombat
+				};
+			}
+
+			var outputState = invokerInstance?.CurrentState();
+			switch(outputState)
+			{
+				case BobsBuddy.BobsBuddyState.Combat:
+					simulationState = TwitchSimulationState.InCombat;
+					break;
+				case BobsBuddy.BobsBuddyState.Shopping:
+					simulationState = TwitchSimulationState.InNonFirstShoppingPhase;
+					break;
+				case BobsBuddy.BobsBuddyState.Initial:
+					simulationState = TwitchSimulationState.WaitingForCombat;
+					break;
+				case null:	
+					simulationState = TwitchSimulationState.WaitingForCombat;
+					break;
+
+			}
+
+			return new Data.BobsBuddyState
+			{
+				PlayerLethalRate = output?.theirDeathRate ?? 0,
+				WinRate = output?.winRate ?? 0,
+				TieRate = output?.tieRate ?? 0,
+				LossRate = output?.lossRate ?? 0,
+				OpponentLethalRate = output?.myDeathRate ?? 0,
+				SimulationState = simulationState
 			};
 		}
 	}
